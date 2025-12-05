@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
+from sqlalchemy import create_engine
 from src.controllers import account, auth, transaction
 from src.database import database
 from src.exceptions import AccountNotFoundError, BusinessError
@@ -12,53 +12,28 @@ from src.exceptions import AccountNotFoundError, BusinessError
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from src.models.tables import metadata
-    from src.database import engine
 
-    # cria as tabelas de forma segura
-    metadata.create_all(engine)
+    # 👉 ENGINE 100% SÍNCRONO PARA CRIAR AS TABELAS
+    sync_engine = create_engine("sqlite:///db.sqlite3", connect_args={"check_same_thread": False})
+    metadata.create_all(sync_engine)
 
+    # 👉 conecta no banco async depois
     await database.connect()
     yield
     await database.disconnect()
 
 
-tags_metadata = [
-    {
-        "name": "auth",
-        "description": "Operations for authentication.",
-    },
-    {
-        "name": "account",
-        "description": "Operations to maintain accounts.",
-    },
-    {
-        "name": "transaction",
-        "description": "Operations to maintain transactions.",
-    },
-]
+app = FastAPI(lifespan=lifespan)
 
-
-app = FastAPI(
-    title="Transactions API",
-    version="1.0.0",
-    summary="Microservice to maintain withdrawal and deposit operations from current accounts.",
-    description="""
-Transactions API is the microservice for recording current account transactions. 💸💰
-
-## Account
-
-* **Create accounts**.
-* **List accounts**.
-* **List account transactions by ID**.
-
-## Transaction
-
-* **Create transactions**.
-""",
-    openapi_tags=tags_metadata,
-    redoc_url=None,
-    lifespan=lifespan,
-)
+#acesso na raiz do app
+@app.get("/")
+def root(request: Request):
+    base_url = str(request.base_url).rstrip("/")
+    return {
+        "message": "API Desafio Bank está no ar!",
+        "docs": f"{base_url}/docs",
+        "redoc": f"{base_url}/redoc"
+    }
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,16 +43,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, tags=["auth"])
-app.include_router(account.router, tags=["account"])
-app.include_router(transaction.router, tags=["transaction"])
-
-
-@app.exception_handler(AccountNotFoundError)
-async def account_not_found_error_handler(request: Request, exc: AccountNotFoundError):
-    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Account not found."})
-
-
-@app.exception_handler(BusinessError)
-async def business_error_handler(request: Request, exc: BusinessError):
-    return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)})
+app.include_router(auth.router)
+app.include_router(account.router)
+app.include_router(transaction.router)

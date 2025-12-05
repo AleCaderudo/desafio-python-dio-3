@@ -1,7 +1,7 @@
 import time
+import hashlib
 from typing import Annotated
 from uuid import uuid4
-
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer
@@ -31,13 +31,15 @@ def sign_jwt(user_id: int) -> JWTToken:
         "iss": "desafio-bank.com.br",
         "sub": user_id,
         "aud": "desafio-bank",
-        "exp": now + (60 * 30),  # 30 minutes
+        "exp": now + (60 * 30),  # 30 minutos
         "iat": now,
         "nbf": now,
         "jti": uuid4().hex,
     }
     token = jwt.encode(payload, SECRET, algorithm=ALGORITHM)
-    return {"access_token": token}
+    access_token = AccessToken(**payload)
+    return JWTToken(access_token=access_token)
+
 
 
 async def decode_jwt(token: str) -> JWTToken | None:
@@ -53,29 +55,21 @@ class JWTBearer(HTTPBearer):
     def __init__(self, auto_error: bool = True):
         super(JWTBearer, self).__init__(auto_error=auto_error)
 
-    async def __call__(self, request: Request) -> JWTToken:
-        authorization = request.headers.get("Authorization", "")
-        scheme, _, credentials = authorization.partition(" ")
-
-        if credentials:
-            if not scheme == "Bearer":
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid authentication scheme.",
-                )
-
-            payload = await decode_jwt(credentials)
-            if not payload:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid or expired token.",
-                )
-            return payload
-        else:
+    async def __call__(self, request: Request):
+        credentials = await super().__call__(request)
+        if credentials is None or credentials.credentials is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authorization code.",
             )
+        payload = await decode_jwt(credentials.credentials)
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token.",
+            )
+        
+        return payload
 
 
 async def get_current_user(
@@ -88,3 +82,17 @@ def login_required(current_user: Annotated[dict[str, int], Depends(get_current_u
     if not current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     return current_user
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password: str, hashed: str) -> bool:
+    return hash_password(password) == hashed
+
+def create_access_token(user_id: int) -> str:
+    payload = {
+        "sub": user_id,
+        "jti": uuid4().hex,
+    }
+    token = jwt.encode(payload, SECRET, algorithm=ALGORITHM)
+    return token
